@@ -99,4 +99,13 @@ Logs are written to:
 
 - `sniffer.log`
 
-Just to test, they will be send to a server elsewhere
+To send each captured event as JSON (`date`, `protocol`, `data`) to another service,
+set an endpoint URL before running:
+
+```bash
+export SNIFFER_JSON_ENDPOINT="http://127.0.0.1:9000/events"
+sudo python3 sniffer.py
+```
+
+If `SNIFFER_JSON_ENDPOINT` is not set, capture continues normally and only local
+logging is used.

@@ -6115,3 +6115,5 @@ Priority: u=0, i
 [2026-04-16 19:45:55] ICMP: dest_unreachable type=3 code=1 src=172.17.0.1 dst=172.17.0.1 ttl=64
 [2026-04-16 19:48:22] ICMP: dest_unreachable type=3 code=1 src=172.17.0.1 dst=172.17.0.1 ttl=64
 [2026-04-16 19:56:31] ICMP: dest_unreachable type=3 code=1 src=172.17.0.1 dst=172.17.0.1 ttl=64
+[2026-04-16 23:19:42] HTTP: POST /login HTTP/1.1 username=alice, password=secret123, cookie=session_test=manual_cookie_abc
+[2026-04-16 23:19:42] HTTP: POST /login HTTP/1.1 username=alice, password=secret123, cookie=session_test=manual_cookie_abc

